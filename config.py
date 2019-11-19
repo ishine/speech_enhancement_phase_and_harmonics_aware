@@ -64,3 +64,5 @@ HOP_LENGTH = 160
 EPSILON = 1e-8
 NUM_WORKERS = 8
 CUDA_ID = ['cuda:0']
+# 文章第5页定义Cr为5
+Cr = 5
