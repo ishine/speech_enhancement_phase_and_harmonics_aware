@@ -1,14 +1,13 @@
 import torch.nn as nn
 import torch
 from config import *
-
+# TODO C_A = 96、C_P = 48
 
 class Attention(nn.Module):
     def __init__(self):
         super(Attention, self).__init__()
-        # TODO 此处的in_channels应该为Ca，即2还需要修改
         # (N x C x H x W)
-        self.conv_2d = nn.Conv2d(in_channels=2, out_channels=Cr, kernel_size=(1, 1))
+        self.conv_2d = nn.Conv2d(in_channels=C_A, out_channels=Cr, kernel_size=(1, 1))
         # (N x C x L)
         self.conv_1d = nn.Conv1d(in_channels=1005, out_channels=402, kernel_size=9, padding=4)
         # bn
@@ -26,6 +25,7 @@ class Attention(nn.Module):
         shape = conv_2d_output.shape
         temp = conv_2d_output.reshape(shape[0], -1, shape[3])
         conv_1d_output = self.relu_1d(self.bn_1d(self.conv_1d(temp)))
+        # TODO Attention 输出形状
         output = conv_1d_output.reshape(input.shape[0], input.shape[1], input.shape[2], -1)
         return output
 
@@ -58,14 +58,20 @@ class FTB(nn.Module):
         return output
 
 
+def f(x1, x2):
+    conv = nn.Conv2d(in_channels=x2.shape[1], out_channels=x1.shape[1], kernel_size=(1, 1))
+    conv_out = conv(x2)
+    return x1 * torch.tanh(conv_out)
+
+
 class TSB(nn.Module):
     def __init__(self):
         super(TSB, self).__init__()
         # A
         self.A_ftb_in = FTB()
         self.A_conv1 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(5, 5), padding=(2, 2))
-        self.A_conv2 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(25, 1))
-        self.A_conv3 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(5, 5))
+        self.A_conv2 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(25, 1), padding=(12, 0))
+        self.A_conv3 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(5, 5), padding=(2, 2))
         self.A_ftb_out = FTB()
         self.A_bn1 = nn.BatchNorm2d(num_features=2)
         self.A_bn2 = nn.BatchNorm2d(num_features=2)
@@ -74,28 +80,93 @@ class TSB(nn.Module):
         self.A_relu2 = nn.ReLU()
         self.A_relu3 = nn.ReLU()
         # P no activation function is used
-        # self.P_conv1 = nn.Conv2d(kernel_size=(5, 3))
-        # self.P_conv2 = nn.Conv2d(kernel_size=(25, 1))
-        # self.P_ln1 = nn.LayerNorm()
-        # self.P_ln2 = nn.LayerNorm()
+        self.P_conv1 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(5, 3), padding=(2, 1))
+        self.P_conv2 = nn.Conv2d(in_channels=2, out_channels=2, kernel_size=(25, 1), padding=(12, 0))
+        self.P_ln1 = nn.LayerNorm(normalized_shape=[2, 201, 1024])
+        self.P_ln2 = nn.LayerNorm(normalized_shape=[2, 201, 1024])
 
     def forward(self, input):
-        input_shape = input.shape   # N,C,T,F
-        ftb_in_out = self.A_ftb_in(input)
-        # TODO 需要padding的
+        A_input = input[0]
+        P_input = input[1]
+        # input_shape = input.shape   # N,C,T,F
+        # A
+        ftb_in_out = self.A_ftb_in(A_input)
         A_conv1_out = self.A_relu1(self.A_bn1(self.A_conv1(ftb_in_out)))
         A_conv2_out = self.A_relu2(self.A_bn2(self.A_conv2(A_conv1_out)))
         A_conv3_out = self.A_relu3(self.A_bn3(self.A_conv3(A_conv2_out)))
-        print(A_conv3_out.shape)
+        ftb_out_out = self.A_ftb_out(A_conv3_out)
 
-
-
-
+        # P
+        P_conv1_out = self.P_ln1(self.P_conv1(P_input))
+        P_conv2_out = self.P_ln2(self.P_conv2(P_conv1_out))
+        # GLN
+        A_out = f(ftb_out_out, P_conv2_out)
+        P_out = f(P_conv2_out, ftb_out_out)
+        return [A_out, P_out]
 
 
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
+        # A stream
+        self.A_conv1 = nn.Conv2d(in_channels=2, out_channels=C_A, kernel_size=(1, 7), padding=(0, 3))
+        self.A_conv2 = nn.Conv2d(in_channels=C_A, out_channels=C_A, kernel_size=(7, 1), padding=(3, 0))
+        self.A_relu1 = nn.ReLU()
+        self.A_relu2 = nn.ReLU()
+        # P steam
+        self.P_conv1 = nn.Conv2d(in_channels=2, out_channels=C_P, kernel_size=(5, 3), padding=(2, 1))
+        self.P_conv2 = nn.Conv2d(in_channels=C_P, out_channels=C_P, kernel_size=(25, 1), padding=(12, 0))
+        self.P_relu1 = nn.ReLU()
+        self.P_relu2 = nn.ReLU()
+        # TSB
+        self.TSB1 = TSB()
+        self.TSB2 = TSB()
+        self.TSB3 = TSB()
+        # TSB之后的卷积层
+        self.A_conv3 = nn.Conv2d(in_channels=C_A, out_channels=C_A, kernel_size=(1, 1))
+        self.A_relu3 = nn.ReLU()
+        self.A_blstm = nn.LSTM(bidirectional=True, batch_first=True, input_size=402, hidden_size=600)
+        self.A_fc1 = nn.Linear(in_features=1200, out_features=600)
+        self.A_fc2 = nn.Linear(in_features=600, out_features=600)
+        self.A_fc3 = nn.Linear(in_features=600, out_features=257)
+        self.A_relu4 = nn.ReLU()
+        self.A_relu5 = nn.ReLU()
+        self.A_sigmoid = nn.Sigmoid()
+
+        self.P_conv3 = nn.Conv1d(in_channels=2, out_channels=2, kernel_size=(1, 1))
 
     def forward(self, input):
-        pass
+        # input (B, C_A, T, F)
+        A_conv1_out = self.A_relu1(self.A_conv1(input))
+        A_conv2_out = self.A_relu2(self.A_conv2(A_conv1_out))
+
+        P_conv1_out = self.P_relu1(self.P_conv1(input))
+        P_conv2_out = self.P_relu2(self.P_conv2(P_conv1_out))
+
+        tsb_input = [A_conv2_out, P_conv2_out]
+        TSB1_out = self.TSB1(tsb_input)
+        TSB2_out = self.TSB2(TSB1_out)
+        TSB3_out = self.TSB2(TSB2_out)
+
+        A3 = TSB3_out[0]
+        P3 = TSB3_out[1]
+
+        # A
+        A_conv3_out = self.A_relu3(self.A_conv3(A3))    # A_conv3_out (B, C, F, T)
+        # 把channels和F捏起来
+        A_conv3_out = A_conv3_out.permute(0, 3, 1, 2)
+        A_conv3_out = A_conv3_out.reshape(A_conv3_out.shape[0], A_conv3_out.shape[1], -1)
+        # blstm输出是前向和后向cat到一起的
+        A_blstm_out, _ = self.A_blstm(A_conv3_out)
+        A_fc1_out = self.A_relu4(self.A_fc1(A_blstm_out))
+        A_fc2_out = self.A_relu5(self.A_fc2(A_fc1_out))
+        A_fc3_out = self.A_sigmoid(self.A_fc3(A_fc2_out))
+
+        P_conv3_out = self.A_conv3(P3)
+        P_out_real = P_conv3_out[:, 0, :, :] / (P_conv3_out[:, 0, :, :] ** 2 + P_conv3_out[:, 1, :, :] ** 2).sqrt()
+        P_out_img = P_conv3_out[:, 1, :, :] / (P_conv3_out[:, 0, :, :] ** 2 + P_conv3_out[:, 1, :, :] ** 2).sqrt()
+        P_out = torch.cat((P_out_real, P_out_img), 1)
+
+        return [A_fc3_out, P_out]
+
+

@@ -64,5 +64,8 @@ HOP_LENGTH = 160
 EPSILON = 1e-8
 NUM_WORKERS = 8
 CUDA_ID = ['cuda:0']
+# A stream和P stream的通道
+C_A = 96
+C_P = 48
 # 文章第5页定义Cr为5
 Cr = 5
