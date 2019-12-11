@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from config import *
-from utils.stft_istft import STFT
+from g_utils.stft_istft import STFT
 
 
 class LabelHelper(nn.Module):
@@ -11,7 +11,9 @@ class LabelHelper(nn.Module):
         self.stft = STFT(FILTER_LENGTH, HOP_LENGTH)
 
     def forward(self, speech_spec, noise_spec):
-        return self.cal_PSM(speech_spec, noise_spec)
+        # return self.cal_PSM(speech_spec, noise_spec)
+        return [self.cal_speech_mag(speech_spec), self.cal_phase_angle(speech_spec)]
+        # return self.cal_phase_angle(speech_spec)
 
     def cal_IRM(self, speech_spec, noise_spec):
         noise_real = noise_spec[:, :, :, 0]
@@ -41,3 +43,6 @@ class LabelHelper(nn.Module):
         y_real = y[:, :, :, 0]
         y_imag = y[:, :, :, 1]
         return ((s_real * y_real + s_imag * y_imag) / (EPSILON + y_real ** 2 + y_imag ** 2)).clamp(0, 1).squeeze()
+
+    def cal_phase_angle(self, speech_spec):
+        return speech_spec
