@@ -1,8 +1,26 @@
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from config import *
+import torch.nn as nn
+
 
 class LossHelper(object):
+
+    @staticmethod
+    def mse_loss_phase(est, label, nframes):
+        with torch.no_grad():
+            mask_for_loss_list = []
+            # 制作掩码
+            for frame_num in nframes:
+                mask_for_loss_list.append(torch.ones(frame_num, label.size()[2], 2, dtype=torch.float32))
+            # input: list of tensor
+            # output: B T * 2
+            mask_for_loss = pad_sequence(mask_for_loss_list, batch_first=True).cuda(CUDA_ID[0])
+        # 使用掩码计算真实值
+        masked_est = est * mask_for_loss
+        masked_label = label * mask_for_loss
+        loss = ((masked_est - masked_label) ** 2).sum() / mask_for_loss.sum()
+        return loss
 
     @staticmethod
     def mse_loss(est, label, nframes):
